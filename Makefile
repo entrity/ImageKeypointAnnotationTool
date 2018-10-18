@@ -8,3 +8,7 @@ annotator: main.o
 
 .cpp.o:
 	$(CXX) $(CXXFLAGS) -c -o $@ $< $(INCS)
+
+clean:
+	rm -f *.o
+	rm -f annotator
