@@ -14,13 +14,28 @@ Make annotations by hand:
 namespace fs = boost::filesystem;
 const int CIRCLE_RADIUS = 3;
 typedef std::vector<std::vector<cv::Point>> AnnoType;
+typedef std::vector<std::array<cv::Point, 2>> RectType;
+
+void next_image ();
+void next_person ();
+void next_keypoint (cv::Point);
+void prev_image ();
+void prev_person ();
+void prev_keypoint ();
+void inc_lbl_cur();
+void load_image_filenames_and_bbs (std::string& images_list_file);
 
 std::deque<fs::path> images;
+std::deque<std::vector<int>> bbs;
 
+cv::Mat img;
 AnnoType annotations;
-int current_index;
+std::vector<cv::Point> dummyAnnotation;
+std::vector<cv::Point>& annotation = dummyAnnotation;
+int current_index; /* index of image */
+RectType bndboxes; /* bounding boxes for current image */
 int person_index;
-cv::Point dummypos(99999, 99999);
+cv::Point dummypos(0, 0);
 
 using namespace std;
 
@@ -50,19 +65,10 @@ const char *lbls[] = {
 	"RAnkle",
 };
 
+/* Output some info about current state */
 void dbg() {
 	cout << endl << "imrem " << images.size()-1-current_index << " p " << person_index+1 << ": " << setw(2) << lbl_cur << "/" << lbl_n << " " << lbls[lbl_cur] << " ";
 	cout.flush();
-}
-
-void inc_lbl_cur() {
-	lbl_cur ++;
-	if (lbl_cur > lbl_n) {
-		std::cout << "END of keypoints" << endl;
-		person_index ++;
-		lbl_cur = 0;
-	}
-	dbg();
 }
 
 void annotating(int event, int x, int y, int flags, void *params){
@@ -70,8 +76,7 @@ void annotating(int event, int x, int y, int flags, void *params){
 
 	std::cout << "(x, y) = (" << x << ", " << y << ")";
 	cv::Point pos(x, y);
-	annotations[current_index].push_back(pos);
-	inc_lbl_cur();
+	next_keypoint(pos);
 }
 
 void load_annotation(const std::string& inputfile, AnnoType& annotations){
@@ -115,28 +120,22 @@ void save_annotation(const AnnoType& annotations, const std::string& outputfile)
 
 int main(int argc, char **argv){
 	if(argc < 3){
-		std::cerr << "usage: " << argv[0] << " images_dir outputfile" << std::endl;
+		std::cerr << "usage: " << argv[0] << " images_and_bbs_list outputfile" << std::endl;
 		return EXIT_FAILURE;
 	}
 
-	std::string images_dir, outputfile, inputfile="";
+	std::string images_list_file, outputfile, inputfile="";
 	if(argc == 3){
-		images_dir = argv[1];
+		images_list_file = argv[1];
 		outputfile = argv[2];
 	}else if(argc == 4){
-		images_dir = argv[1];
+		images_list_file = argv[1];
 		inputfile = argv[2];
 		outputfile = argv[3];
 	}
 
-	fs::directory_iterator dit(images_dir), dend;
+	load_image_filenames_and_bbs(images_list_file);
 
-	for(; dit != dend; dit++){
-		auto p = dit->path();
-		if(p.extension() != ".png" && p.extension() != ".jpg" && p.extension() != ".bmp") continue;
-		images.push_back(*dit);
-	}
-	std::sort(images.begin(), images.end());
 	if(images.size() == 0){
 		std::cerr << "No images are found" << std::endl;
 		return EXIT_FAILURE;
@@ -152,10 +151,10 @@ int main(int argc, char **argv){
 	int prev_index = -1;
 	int key = 0;
 	bool is_loop = true;
-	cv::Mat img;
 	cv::setMouseCallback("image", annotating);
 	while(is_loop){
 		if(current_index != prev_index){
+			/* Load image from file */
 			auto p = images[current_index];
 			img = cv::imread(p.string());
 			if(img.empty()){
@@ -165,13 +164,34 @@ int main(int argc, char **argv){
 			std::cout << "LOADING FILE " << p.string() << endl;
 			prev_index = current_index;
 			dbg();
+			/* Prep bounding boxes */
+			bndboxes.clear();
+			auto curbbs = bbs[current_index];
+			for (int i = 0; i < curbbs.size(); i += 4) {
+				bndboxes.push_back( { cv::Point(curbbs[i], curbbs[i+1]),
+					cv::Point(curbbs[i+2], curbbs[i+3]) } );
+			}
 		}
 
-		auto& annotation = annotations[current_index];
+		/* Draw bounding box */
+		{
+			auto pt1 = cv::Point(
+				bbs[current_index][4*person_index+0],
+				bbs[current_index][4*person_index+1]);
+			auto pt2 = cv::Point(
+				bbs[current_index][4*person_index+2],
+				bbs[current_index][4*person_index+3]);
+			auto color = cv::Scalar(50, 255, 25);
+			cv::rectangle(img, pt1, pt2, color);
+		}
+
+		/* Draw annotation dot */
+		annotation = annotations[current_index];
 		for(int i=0; i<annotation.size(); i++){
 			auto color = cv::Scalar(i*255/annotation.size(), 0, 255);
 			cv::circle(img, annotation[i], CIRCLE_RADIUS, color, -1);
 		}
+
 
 		cv::imshow("image", img);
 		key = cv::waitKey(100);
@@ -180,31 +200,21 @@ int main(int argc, char **argv){
 			case 'j':
 			case 'f':
 			case ' ':
-			case 83:
+			case 83: /* next image */
 				current_index = std::min<int>(++current_index, images.size()-1);
 				person_index = 0;
 				dbg();
 				break;
 			case 'k':
 			case 'b':
-			case 81:
+			case 81: /* previous image */
 				current_index = std::max<int>(0, --current_index);
 				dbg();
 				break;
-			case 's':
-				annotations[current_index].push_back(dummypos);
-				inc_lbl_cur();
-				break;
-			case 8:
-				if(annotation.size()>0){
-					annotation.pop_back();
-					img = cv::imread(images[current_index].string());
-					lbl_cur --;
-					if (lbl_cur < 0)
-						lbl_cur = current_index ? lbl_n : 0;
-				}
-				dbg();
-				break;
+			case 's': /* skip keypoint */
+				next_keypoint(dummypos); break;
+			case 8: /* (backspace) remove keypoint */
+				prev_keypoint(); break;
 			case 'q':
 			case 27:
 				is_loop = false;
@@ -214,4 +224,65 @@ int main(int argc, char **argv){
 
 	save_annotation(annotations, outputfile);
 	return EXIT_SUCCESS;
+}
+
+void next_person () {
+	person_index ++;
+}
+void prev_person () {
+	person_index --;
+}
+void next_keypoint (cv::Point pos) {
+	annotations[current_index].push_back(pos);
+	inc_lbl_cur();
+}
+void prev_keypoint () {
+	if(annotation.size()>0){
+		annotation.pop_back();
+		img = cv::imread(images[current_index].string());
+		lbl_cur --;
+		if (lbl_cur < 0) {
+			if (person_index) {
+				prev_person();
+				lbl_cur = lbl_n;
+			} else {
+				lbl_cur = 0;
+			}
+		}
+	}
+	dbg();
+}
+/* Increment the cursor which says which keypoint is currently being annotated */
+void inc_lbl_cur() {
+	lbl_cur ++;
+	if (lbl_cur > lbl_n) {
+		std::cout << "END of keypoints" << endl;
+		lbl_cur = 0;
+		next_person();
+	}
+	dbg();
+}
+
+void load_image_filenames_and_bbs (string& images_list_file) {
+	ifstream inFile(images_list_file, ios::in);
+	string line;
+	if ( inFile.is_open() ) {
+		while ( getline(inFile, line) ) {
+			if (line.length() == 0) continue;
+			vector<int> bbs_for_img;
+			int s = 0, e = line.find("\t");
+			if (e == string::npos) e = line.length();
+			images.push_back(line.substr(s, e - s));
+			for (s = e + 1; s < line.length(); s = e + 1) {
+				e = line.find("\t", s);
+				cout << "e " << e << ' ';
+				if (e == string::npos) e = line.length();
+				cout << "substr " << s << " " << e << ' ' << line.length() << ' ' <<line.substr(s, e - s) << endl;
+				bbs_for_img.push_back(std::stoi(line.substr(s, e - s)));
+			}
+			assert(bbs_for_img.size());
+			assert(bbs_for_img.size() % 4 == 0);
+			bbs.push_back(bbs_for_img);
+		}
+	}
 }
