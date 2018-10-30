@@ -1,3 +1,9 @@
+/*
+Make annotations by hand:
+	./annotations -i <inputdir> outfile
+
+*/
+
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -18,7 +24,7 @@ cv::Point dummypos(99999, 99999);
 
 using namespace std;
 
-const int lbl_n = 16;
+const int lbl_n = 20; // actually the index of the last item in the list
 int lbl_cur;
 const char *lbls[] = {
 	"Nose",
@@ -45,7 +51,7 @@ const char *lbls[] = {
 };
 
 void dbg() {
-	cout << endl << "enter p" << person_index << ": " << setw(2) << lbl_cur << "/" << lbl_n << " " << lbls[lbl_cur] << " ";
+	cout << endl << "imrem " << images.size()-1-current_index << " p " << person_index+1 << ": " << setw(2) << lbl_cur << "/" << lbl_n << " " << lbls[lbl_cur] << " ";
 	cout.flush();
 }
 
@@ -194,7 +200,8 @@ int main(int argc, char **argv){
 					annotation.pop_back();
 					img = cv::imread(images[current_index].string());
 					lbl_cur --;
-					if (lbl_cur < 0) lbl_cur = lbl_n - 1;
+					if (lbl_cur < 0)
+						lbl_cur = current_index ? lbl_n : 0;
 				}
 				dbg();
 				break;

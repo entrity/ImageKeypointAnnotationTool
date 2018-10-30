@@ -1,0 +1,1 @@
+./annotator inputs/ output.txt
