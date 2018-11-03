@@ -24,9 +24,8 @@ parser.add_option("-2", dest="interpret_x2y2", action="store_true", help="3rd an
 DEFAULT_DOT_SIZE=6
 DEFAULT_BB_SIZE=1
 
-def load_annotations(fpath):
-	annotations = OrderedDict()
-	return annotations
+def keyify(obj):
+	return tuple(obj.reshape(-1).round().astype(np.int32))
 
 class Rainbow(dict):
 	def __init__(self, bbs, kp_sets):
@@ -35,10 +34,10 @@ class Rainbow(dict):
 		rgb_ints   = lambda : [ int(x) for x in colors[i][:-1]*255 ]
 		rgb_hex    = lambda : '#%02x%02x%02x' % tuple(rgb_ints())
 		for bb in bbs:
-			self[tuple(bb)] = rgb_hex()
+			self[keyify(bb)] = rgb_hex()
 			i += 1
 		for kps in kp_sets:
-			self[tuple(kps.reshape(-1))] = rgb_hex()
+			self[keyify(kps)] = rgb_hex()
 			i += 1
 
 class UI(object):
@@ -61,6 +60,9 @@ class UI(object):
 		cls.load_annotations(opts.bbs_file, opts.kps_file)
 		cls.all_bb2kp = {}
 		cls.all_kp2bb = {}
+		cls.bb2kp = OrderedDict()
+		cls.kp2bb = OrderedDict()
+		cls.img_i = -1
 		# Init GUI
 		cls.ui = Tk()
 		cls.canvas = Canvas(cls.ui)
@@ -72,28 +74,32 @@ class UI(object):
 		cls.ui.bind('<Button-1>', cls.onmouse1)
 		cls.ui.bind('<Button-2>', cls.onmouse2)
 		cls.ui.bind('<Button-3>', cls.onmouse3)
-		cls.img_i = -1
+		# Load data if any
+		cls.load_data()
+		# Load image to canvas
 		cls.next_img()
+		# Start GUI
 		mainloop()
 
 	@classmethod
 	def color(cls, obj):
-		tup = tuple(obj.reshape(-1))
+		tup = keyify(obj)
 		if tup in cls.bb2kp or tup in cls.kp2bb:
 			return '#666'
 		return cls.rainbow[tup]
 
 	@classmethod
 	def next_img(cls, inc=1):
-		cls.save_data()
+		print('next_img called')
 		cls.img_i += inc
+		if (len(cls.all_bb2kp.keys())): cls.save_data()
 		if cls.img_i < 0 or cls.img_i > len(cls.meta):
 			cls.img_i -= inc
 			return
-		cls.bb2kp = cls.all_bb2kp.setdefault(img_i, OrderedDict()) # tuple(bb) => kps
-		cls.kp2bb = cls.all_kp2bb.setdefault(img_i, OrderedDict()) # map  tuple(kps) => bb
 		# Get annotations and meta
 		cls.fpath, cls.bbs, cls.kp_sets = cls.meta[cls.img_i]
+		cls.bb2kp = cls.all_bb2kp.setdefault(cls.fpath, OrderedDict()) # tuple(bb) => kps
+		cls.kp2bb = cls.all_kp2bb.setdefault(cls.fpath, OrderedDict()) # map  tuple(kps) => bb
 		# Assign colors
 		cls.rainbow = Rainbow(cls.bbs, cls.kp_sets)
 		# Clear and load
@@ -107,18 +113,20 @@ class UI(object):
 			cls.draw_bb(bb)
 		for kps in cls.kp_sets:
 			cls.draw_keypoints(kps)
-	@classmethod
+	@classmethod # Load image and drawings to canvas
 	def load_img(cls):
-		print('Loading img %s' % cls.fpath)
+		print('Loading img (%d) %s' % (cls.img_i, cls.fpath))
 		im = cls.canvas.im = ImageTk.PhotoImage(Image.open(cls.fpath))
 		cls.canvas.config(width=im.width(), height=im.height())
 		cls.canvas.itemconfig(cls.canvas_img, image=im)
 	@classmethod
 	def draw_keypoints(cls, kps, linewidth=DEFAULT_DOT_SIZE):
+		if np.array_equal(cls.active_kps, kps): linewidth=12
 		for x,y in kps:
 			ov = cls.canvas.create_oval(x,y,x,y, outline=cls.color(kps), width=linewidth, tags=('kp',))
 	@classmethod
 	def draw_bb(cls, bb, linewidth=DEFAULT_BB_SIZE):
+		if np.array_equal(cls.active_bb, bb): linewidth=6
 		cls.canvas.create_rectangle(*bb, outline=cls.color(bb), width=linewidth, tags=('bb',))
 
 	@classmethod
@@ -137,10 +145,11 @@ class UI(object):
 					nearest = i
 		# Iterate bbs to draw
 		cls.canvas.delete('bb')
-		cls.active_bb = None
 		for i, bb in enumerate(cls.bbs):
-			if i == nearest: cls.active_bb = bb
-			cls.draw_bb(bb, 6 if i==nearest else DEFAULT_BB_SIZE)
+			if i == nearest:
+				cls.active_bb = bb
+		cls.redraw()
+		cls.set_match()
 	@classmethod
 	def activate_kps(cls, x, y):
 		threshold = 50
@@ -157,16 +166,24 @@ class UI(object):
 					nearest = i
 		# Iterate bbs to draw
 		cls.canvas.delete('kp')
-		cls.active_kps = None
 		for i, kps in enumerate(cls.kp_sets):
-			if i == nearest: cls.active_kps = kps
-			cls.draw_keypoints(kps, 12 if i==nearest else DEFAULT_DOT_SIZE)
+			if i == nearest:
+				cls.active_kps = kps
+		cls.redraw()
+		cls.set_match()
 	@classmethod
 	def set_match(cls):
-		if cls.active_kps is not None and cls.active_bb is not None:
-			cls.bb2kp[tuple(cls.active_bb.reshape(-1))] = cls.active_kps
-			cls.kp2bb[tuple(cls.active_kps.reshape(-1))] = cls.active_bb
-			cls.redraw()
+		is_set = False
+		if getattr(cls,'active_kps',None) is not None and getattr(cls,'active_bb',None) is not None:
+			cls.bb2kp = cls.all_bb2kp.setdefault(cls.fpath, OrderedDict()) # tuple(bb) => kps
+			cls.kp2bb = cls.all_kp2bb.setdefault(cls.fpath, OrderedDict()) # map  tuple(kps) => bb
+			cls.bb2kp[keyify(cls.active_bb)] = cls.active_kps
+			cls.kp2bb[keyify(cls.active_kps)] = cls.active_bb
+			if cls.img_i > -1: cls.redraw()
+			cls.active_kps = None
+			cls.active_bb = None
+			is_set = True
+		return is_set
 	@classmethod
 	def undo_match(cls):
 		cls.bb2kp.popitem()
@@ -175,14 +192,36 @@ class UI(object):
 
 	@classmethod
 	def save_data(cls):
-		for fpath, bbs, kp_sets in cls.meta:
-			with open(fpath+'.annotations.npy', 'w') as f:
-				pass
+		with open('annotations.tsv', 'w') as f:
+			for fpath in cls.all_bb2kp:
+				bb2kp = cls.all_bb2kp[fpath]
+				for bb_tup in bb2kp:
+					f.write(fpath)
+					for v in bb_tup: f.write('\t%f' % v)
+					kp_tup = bb2kp[bb_tup].reshape(-1)
+					for v in kp_tup: f.write('\t%f' % v)
+					f.write('\n')
+	@classmethod
+	def load_data(cls):
+		if not os.path.exists('annotations.tsv'): return
+		with open('annotations.tsv', 'r') as f:
+			for line in f:
+				vals = line.split('\t')
+				cls.fpath = vals[0]
+				print(cls.fpath)
+				bb_tup = tuple(np.array(vals[1:5]).astype(np.float64))
+				assert(len(bb_tup) ==  4)
+				kp_tup = tuple(np.array(vals[5:]).astype(np.float64))
+				assert(len(kp_tup) == 21*2)
+				cls.active_bb = np.array(bb_tup)
+				cls.active_kps = np.array(kp_tup).reshape(21, 2)
+				assert(cls.set_match())
 
 	@staticmethod
 	def onkeypress(evt):
 		if evt.char.lower() == 'q':
 			UI.ui.destroy()
+			UI.save_data()
 		elif evt.char.lower() == 'c':
 			UI.canvas.delete(tkinter.ALL)
 		elif evt.char.lower() == 'u':
@@ -203,7 +242,8 @@ class UI(object):
 		UI.activate_kps(evt.x, evt.y)
 	@staticmethod
 	def onmouse3(evt):
-		UI.set_match()
+		pass
+		# UI.set_match()
 
 UI.start()
 k = UI.next_img()
