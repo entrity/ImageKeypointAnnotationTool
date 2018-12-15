@@ -190,6 +190,7 @@ class UI(object):
 		cls.kp2bb.popitem()
 		cls.redraw()
 
+	# Write TSV: fpath, (bb), ((x,y),...)
 	@classmethod
 	def save_data(cls):
 		with open('annotations.tsv', 'w') as f:
